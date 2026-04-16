@@ -114,22 +114,25 @@ export default function Home() {
     URL.revokeObjectURL(url);
   };
 
-  const ok = items.filter((i) => getStatus(i.qty, i.threshold) === 'ok').length;
-  const low = items.filter((i) => getStatus(i.qty, i.threshold) === 'low').length;
-  const out = items.filter((i) => getStatus(i.qty, i.threshold) === 'out').length;
+  // Only show water can for now
+  const visibleItems = items.filter((i) => i.id === 'water');
+
+  const ok = visibleItems.filter((i) => getStatus(i.qty, i.threshold) === 'ok').length;
+  const low = visibleItems.filter((i) => getStatus(i.qty, i.threshold) === 'low').length;
+  const out = visibleItems.filter((i) => getStatus(i.qty, i.threshold) === 'out').length;
 
   return (
     <div className="flex min-h-screen">
       {/* Main content */}
       <main className="flex-1 p-4 md:p-6 max-w-5xl mx-auto w-full">
         <Header />
-        <StatsBar total={items.length} ok={ok} low={low} out={out} />
+        <StatsBar total={visibleItems.length} ok={ok} low={low} out={out} />
 
         {loading ? (
           <div className="text-center py-10 text-amber-700">{t('loading')}</div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <ItemCard
                 key={item.id}
                 item={item}
@@ -158,7 +161,7 @@ export default function Home() {
 
       {/* Graph Sidebar */}
       <GraphSidebar
-        items={items}
+        items={visibleItems}
         isOpen={sidebarOpen}
         onToggle={() => setSidebarOpen(!sidebarOpen)}
       />
