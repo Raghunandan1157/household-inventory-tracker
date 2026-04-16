@@ -1,65 +1,176 @@
-import Image from "next/image";
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import { InventoryItem, getStatus, SEED_ITEMS } from '@/lib/types';
+import { supabase, getItems, updateItemQty, updateItemThreshold, resetAllItems, seedDatabase } from '@/lib/supabase';
+import { useLanguage } from '@/context/LanguageContext';
+import Header from '@/components/Header';
+import StatsBar from '@/components/StatsBar';
+import ItemCard from '@/components/ItemCard';
+import ThresholdModal from '@/components/ThresholdModal';
+import GraphSidebar from '@/components/GraphSidebar';
 
 export default function Home() {
+  const { t } = useLanguage();
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [modalItem, setModalItem] = useState<InventoryItem | null>(null);
+
+  const loadItems = useCallback(async () => {
+    try {
+      await seedDatabase();
+      const data = await getItems();
+      setItems(data);
+    } catch (err) {
+      console.error('Failed to load items:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadItems();
+
+    const channel = supabase
+      .channel('inventory-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'inventory' }, () => {
+        loadItems();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadItems]);
+
+  const handleChangeQty = async (id: string, delta: number) => {
+    const item = items.find((i) => i.id === id);
+    if (!item) return;
+    const newQty = Math.max(0, item.qty + delta);
+    if (newQty === item.qty) return;
+
+    setItems((prev) =>
+      prev.map((i) =>
+        i.id === id ? { ...i, qty: newQty, updated_at: new Date().toISOString() } : i
+      )
+    );
+
+    try {
+      await updateItemQty(id, newQty);
+    } catch (err) {
+      console.error('Failed to update qty:', err);
+      loadItems();
+    }
+  };
+
+  const handleEditThreshold = (id: string) => {
+    const item = items.find((i) => i.id === id);
+    if (item) setModalItem(item);
+  };
+
+  const handleSaveThreshold = async (value: number) => {
+    if (!modalItem) return;
+    try {
+      await updateItemThreshold(modalItem.id, value);
+      setItems((prev) =>
+        prev.map((i) =>
+          i.id === modalItem.id ? { ...i, threshold: value, updated_at: new Date().toISOString() } : i
+        )
+      );
+    } catch (err) {
+      console.error('Failed to update threshold:', err);
+    }
+    setModalItem(null);
+  };
+
+  const handleReset = async () => {
+    if (!confirm(t('confirmReset'))) return;
+    try {
+      await resetAllItems();
+      await loadItems();
+    } catch (err) {
+      console.error('Failed to reset:', err);
+    }
+  };
+
+  const handleExport = () => {
+    const data = {
+      exported: new Date().toISOString(),
+      items: items.map((i) => ({
+        name: i.name,
+        quantity: i.qty,
+        unit: i.unit,
+        threshold: i.threshold,
+        updated: i.updated_at,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `inventory-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const ok = items.filter((i) => getStatus(i.qty, i.threshold) === 'ok').length;
+  const low = items.filter((i) => getStatus(i.qty, i.threshold) === 'low').length;
+  const out = items.filter((i) => getStatus(i.qty, i.threshold) === 'out').length;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <div className="flex min-h-screen">
+      {/* Main content */}
+      <main className="flex-1 p-4 md:p-6 max-w-5xl mx-auto w-full">
+        <Header />
+        <StatsBar total={items.length} ok={ok} low={low} out={out} />
+
+        {loading ? (
+          <div className="text-center py-10 text-amber-700">{t('loading')}</div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {items.map((item) => (
+              <ItemCard
+                key={item.id}
+                item={item}
+                onChangeQty={handleChangeQty}
+                onEditThreshold={handleEditThreshold}
+              />
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-3 mt-6 mb-8">
+          <button
+            onClick={handleReset}
+            className="px-5 py-2.5 rounded-xl border-2 border-amber-400 bg-white text-amber-900 font-semibold hover:bg-amber-400 transition-colors text-sm"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            {t('resetAll')}
+          </button>
+          <button
+            onClick={handleExport}
+            className="px-5 py-2.5 rounded-xl border-2 border-amber-400 bg-amber-400 text-amber-900 font-semibold hover:bg-amber-500 transition-colors text-sm"
           >
-            Documentation
-          </a>
+            {t('exportJson')}
+          </button>
         </div>
       </main>
+
+      {/* Graph Sidebar */}
+      <GraphSidebar
+        items={items}
+        isOpen={sidebarOpen}
+        onToggle={() => setSidebarOpen(!sidebarOpen)}
+      />
+
+      {/* Threshold Modal */}
+      <ThresholdModal
+        isOpen={!!modalItem}
+        itemName={modalItem ? t(modalItem.id) : ''}
+        currentThreshold={modalItem?.threshold ?? 0}
+        onSave={handleSaveThreshold}
+        onClose={() => setModalItem(null)}
+      />
     </div>
   );
 }
